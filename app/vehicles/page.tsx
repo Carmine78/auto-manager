@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,14 +14,18 @@ type Vehicle = {
   initial_odometer_km: number;
   current_odometer_km: number;
   notes: string | null;
+  is_active: boolean;
 };
 
 export default function VehiclesPage() {
   const router = useRouter();
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+
   const [brand, setBrand] = useState("");
   const [model, setModel] = useState("");
   const [plate, setPlate] = useState("");
@@ -35,8 +40,10 @@ export default function VehiclesPage() {
         return;
       }
 
-      const { data: { user }, error: authError } =
-        await supabase.auth.getUser();
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
       if (authError || !user) {
         router.replace("/login");
@@ -61,7 +68,28 @@ export default function VehiclesPage() {
     void loadVehicles();
   }, [router]);
 
-  async function addVehicle(event: React.FormEvent<HTMLFormElement>) {
+  function resetForm() {
+    setBrand("");
+    setModel("");
+    setPlate("");
+    setFuelType("Benzina");
+    setOdometer("");
+    setEditingId(null);
+    setMessage("");
+  }
+
+  function editVehicle(vehicle: Vehicle) {
+    setEditingId(vehicle.id);
+    setBrand(vehicle.brand);
+    setModel(vehicle.model);
+    setPlate(vehicle.plate);
+    setFuelType(vehicle.fuel_type);
+    setOdometer(String(vehicle.current_odometer_km));
+    setMessage("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveVehicle(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
 
@@ -70,8 +98,10 @@ export default function VehiclesPage() {
       return;
     }
 
-    const { data: { user }, error: authError } =
-      await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
 
     if (authError || !user) {
       router.replace("/login");
@@ -80,44 +110,75 @@ export default function VehiclesPage() {
 
     const km = Number(odometer);
 
-    if (!Number.isFinite(km) || km < 0) {
-      setMessage("Inserisci un chilometraggio valido.");
+    if (!Number.isFinite(km) || km < 0 || !Number.isInteger(km)) {
+      setMessage("Inserisci un chilometraggio valido, in km interi.");
       return;
     }
 
     setSaving(true);
 
-    const { data, error } = await supabase
-      .from("vehicles")
-      .insert({
-        user_id: user.id,
-        brand: brand.trim(),
-        model: model.trim(),
-        plate: plate.trim().toUpperCase(),
-        fuel_type: fuelType,
-        initial_odometer_km: km,
-        current_odometer_km: km,
-        is_active: true,
-      })
-      .select()
-      .single();
+    const vehicleData = {
+      brand: brand.trim(),
+      model: model.trim(),
+      plate: plate.trim().toUpperCase(),
+      fuel_type: fuelType,
+      current_odometer_km: km,
+    };
+
+    const result =
+      editingId === null
+        ? await supabase
+            .from("vehicles")
+            .insert({
+              ...vehicleData,
+              user_id: user.id,
+              initial_odometer_km: km,
+              is_active: true,
+            })
+            .select()
+            .single()
+        : await supabase
+            .from("vehicles")
+            .update(vehicleData)
+            .eq("id", editingId)
+            .eq("user_id", user.id)
+            .select()
+            .single();
+
+    const { data, error } = result;
 
     if (error) {
       setMessage("Errore nel salvataggio: " + error.message);
+    } else if (!data) {
+      setMessage("Nessuna automobile aggiornata. Ricarica la pagina e riprova.");
     } else {
-      setVehicles((previous) => [data as Vehicle, ...previous]);
-      setBrand("");
-      setModel("");
-      setPlate("");
-      setOdometer("");
-      setMessage("Automobile salvata correttamente.");
+      const savedVehicle = data as Vehicle;
+
+      setVehicles((previous) =>
+        editingId === null
+          ? [savedVehicle, ...previous]
+          : previous.map((vehicle) =>
+              vehicle.id === editingId ? savedVehicle : vehicle
+            )
+      );
+
+      setMessage(
+        editingId === null
+          ? "Automobile salvata correttamente."
+          : "Automobile modificata correttamente."
+      );
+
+      resetForm();
     }
 
     setSaving(false);
   }
 
   return (
-    <main className="container" style={{ paddingTop: 32, paddingBottom: 40 }}>
+    <main
+      className="container"
+      style={{ paddingTop: 32, paddingBottom: 40 }}
+    >
       <p className="muted">
         <a href="/">← Torna alla pagina iniziale</a>
       </p>
@@ -131,9 +192,13 @@ export default function VehiclesPage() {
       </header>
 
       <section className="card" style={{ marginBottom: 24 }}>
-        <h2>Aggiungi un'automobile</h2>
+        <h2>
+          {editingId === null
+            ? "Aggiungi un'automobile"
+            : "Modifica automobile"}
+        </h2>
 
-        <form onSubmit={addVehicle}>
+        <form onSubmit={saveVehicle}>
           <label className="field">
             Marca
             <input
@@ -197,13 +262,33 @@ export default function VehiclesPage() {
             />
           </label>
 
-          <button className="button" type="submit" disabled={saving}>
-            {saving ? "Salvataggio..." : "Salva automobile"}
-          </button>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button className="button" type="submit" disabled={saving}>
+              {saving
+                ? "Salvataggio..."
+                : editingId === null
+                  ? "Salva automobile"
+                  : "Salva modifiche"}
+            </button>
+
+            {editingId !== null && (
+              <button
+                className="button"
+                type="button"
+                disabled={saving}
+                onClick={resetForm}
+              >
+                Annulla
+              </button>
+            )}
+          </div>
         </form>
 
         {message && (
-          <p role="status" style={{ marginTop: 16, overflowWrap: "anywhere" }}>
+          <p
+            role="status"
+            style={{ marginTop: 16, overflowWrap: "anywhere" }}
+          >
             {message}
           </p>
         )}
@@ -229,8 +314,19 @@ export default function VehiclesPage() {
                 <p>Alimentazione: {vehicle.fuel_type}</p>
                 <p>
                   Chilometraggio:{" "}
-                  {Number(vehicle.current_odometer_km).toLocaleString("it-IT")} km
+                  {Number(vehicle.current_odometer_km).toLocaleString(
+                    "it-IT"
+                  )}{" "}
+                  km
                 </p>
+
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => editVehicle(vehicle)}
+                >
+                  Modifica
+                </button>
               </article>
             ))}
           </div>
@@ -239,4 +335,3 @@ export default function VehiclesPage() {
     </main>
   );
 }
-
