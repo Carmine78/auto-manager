@@ -18,7 +18,7 @@ type Reminder = {
   category: string;
   due_date: string | null;
   reminder_date: string | null;
-  status: string;
+  status: string | null;
   notes: string | null;
 };
 
@@ -38,6 +38,10 @@ function formatDate(value: string | null) {
   return new Date(value + "T12:00:00").toLocaleDateString("it-IT");
 }
 
+function isCompleted(status: string | null) {
+  return status === "completed";
+}
+
 export default function RemindersPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [records, setRecords] = useState<Reminder[]>([]);
@@ -50,11 +54,11 @@ export default function RemindersPage() {
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
   async function loadData() {
     setLoading(true);
-    setMessage("");
 
     const { data: authData, error: authError } =
       await supabase.auth.getUser();
@@ -76,7 +80,9 @@ export default function RemindersPage() {
       .order("brand");
 
     if (vehicleError) {
-      setMessage("Errore nel caricamento dei veicoli: " + vehicleError.message);
+      setMessage(
+        "Errore nel caricamento dei veicoli: " + vehicleError.message
+      );
       setLoading(false);
       return;
     }
@@ -92,7 +98,9 @@ export default function RemindersPage() {
       .order("due_date", { ascending: true, nullsFirst: false });
 
     if (reminderError) {
-      setMessage("Errore nel caricamento delle scadenze: " + reminderError.message);
+      setMessage(
+        "Errore nel caricamento delle scadenze: " + reminderError.message
+      );
       setLoading(false);
       return;
     }
@@ -128,7 +136,7 @@ export default function RemindersPage() {
       category,
       due_date: dueDate || null,
       reminder_date: reminderDate || null,
-      status: "Da fare",
+      status: "pending",
       notes: notes.trim() || null,
     });
 
@@ -149,7 +157,6 @@ export default function RemindersPage() {
     await loadData();
   }
 
- 
   async function toggleStatus(record: Reminder) {
     setMessage("");
 
@@ -158,8 +165,11 @@ export default function RemindersPage() {
       return;
     }
 
-    const newStatus =
-      record.status === "Completata" ? "Da fare" : "Completata";
+    if (updatingId !== null) return;
+
+    setUpdatingId(record.id);
+
+    const newStatus = isCompleted(record.status) ? "pending" : "completed";
 
     const { data, error } = await supabase
       .from("reminders")
@@ -167,6 +177,8 @@ export default function RemindersPage() {
       .eq("id", record.id)
       .eq("user_id", userId)
       .select("id, status");
+
+    setUpdatingId(null);
 
     if (error) {
       setMessage("Errore nell'aggiornamento: " + error.message);
@@ -180,19 +192,26 @@ export default function RemindersPage() {
       return;
     }
 
-    setMessage(
-      "Aggiornamento riuscito: stato " + data[0].status + "."
+    setRecords((current) =>
+      current.map((item) =>
+        item.id === record.id ? { ...item, status: newStatus } : item
+      )
     );
 
-    await loadData();
+    setMessage(
+      newStatus === "completed"
+        ? "Scadenza contrassegnata come completata."
+        : "Scadenza riportata tra quelle da fare."
+    );
   }
 
-
   const pendingCount = records.filter(
-    (record) => record.status !== "Completata"
+    (record) => !isCompleted(record.status)
   ).length;
 
-  const completedCount = records.length - pendingCount;
+  const completedCount = records.filter((record) =>
+    isCompleted(record.status)
+  ).length;
 
   const vehicleName = (id: number) => {
     const vehicle = vehicles.find((item) => item.id === id);
@@ -341,56 +360,64 @@ export default function RemindersPage() {
           </p>
         ) : (
           <div className="grid gap-3">
-            {records.map((record) => (
-              <article
-                key={record.id}
-                className="rounded-xl border p-4 shadow-sm"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold">{record.title}</p>
-                    <p className="mt-1 text-sm text-gray-600">
-                      {record.category} · {vehicleName(record.vehicle_id)}
+            {records.map((record) => {
+              const completed = isCompleted(record.status);
+              const updating = updatingId === record.id;
+
+              return (
+                <article
+                  key={record.id}
+                  className="rounded-xl border p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold">{record.title}</p>
+                      <p className="mt-1 text-sm text-gray-600">
+                        {record.category} · {vehicleName(record.vehicle_id)}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        completed
+                          ? "bg-green-100 text-green-800"
+                          : "bg-amber-100 text-amber-800"
+                      }`}
+                    >
+                      {completed ? "Completata" : "Da fare"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                    <p>
+                      <span className="font-medium">Scadenza:</span>{" "}
+                      {formatDate(record.due_date)}
+                    </p>
+                    <p>
+                      <span className="font-medium">Promemoria:</span>{" "}
+                      {formatDate(record.reminder_date)}
                     </p>
                   </div>
 
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      record.status === "Completata"
-                        ? "bg-green-100 text-green-800"
-                        : "bg-amber-100 text-amber-800"
-                    }`}
+                  {record.notes && (
+                    <p className="mt-3 text-sm text-gray-600">{record.notes}</p>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={updatingId !== null}
+                    onClick={() => void toggleStatus(record)}
+                    className="mt-4 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
                   >
-                    {record.status || "Da fare"}
-                  </span>
-                </div>
-
-                <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                  <p>
-                    <span className="font-medium">Scadenza:</span>{" "}
-                    {formatDate(record.due_date)}
-                  </p>
-                  <p>
-                    <span className="font-medium">Promemoria:</span>{" "}
-                    {formatDate(record.reminder_date)}
-                  </p>
-                </div>
-
-                {record.notes && (
-                  <p className="mt-3 text-sm text-gray-600">{record.notes}</p>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => void toggleStatus(record)}
-                  className="mt-4 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50"
-                >
-                  {record.status === "Completata"
-                    ? "Riporta tra le scadenze da fare"
-                    : "Segna come completata"}
-                </button>
-              </article>
-            ))}
+                    {updating
+                      ? "Aggiornamento..."
+                      : completed
+                        ? "Riporta tra le scadenze da fare"
+                        : "Segna come completata"}
+                  </button>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
