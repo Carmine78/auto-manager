@@ -1,48 +1,42 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabase";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 type Vehicle = {
   id: number;
   brand: string;
   model: string;
-  plate: string;
+  plate: string | null;
 };
 
 type Reminder = {
   id: number;
+  user_id: string;
   vehicle_id: number;
   title: string;
-  category: string;
+  category: string | null;
   due_date: string | null;
   reminder_date: string | null;
   status: string | null;
   notes: string | null;
+  created_at: string;
 };
 
-const categories = [
-  "Revisione",
-  "Assicurazione",
-  "Bollo",
-  "Manutenzione",
-  "Tagliando",
-  "Pneumatici",
-  "Documenti",
-  "Altro",
-];
-
-function formatDate(value: string | null) {
-  if (!value) return "Non impostata";
-  return new Date(value + "T12:00:00").toLocaleDateString("it-IT");
+function isCompleted(status: string | null) {
+  return status?.toLowerCase() === "completed";
 }
 
-function isCompleted(status: string | null) {
-  return status === "completed";
+function formatDate(date: string | null) {
+  if (!date) return "—";
+  return new Date(`${date.slice(0, 10)}T12:00:00`).toLocaleDateString("it-IT");
 }
 
 export default function RemindersPage() {
+  const router = useRouter();
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [records, setRecords] = useState<Reminder[]>([]);
   const [userId, setUserId] = useState("");
@@ -57,88 +51,115 @@ export default function RemindersPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
-  async function loadData() {
-    setLoading(true);
+  const loadData = useCallback(async (currentUserId: string) => {
+    const [vehicleResult, reminderResult] = await Promise.all([
+      supabase
+        .from("vehicles")
+        .select("id, brand, model, plate")
+        .eq("user_id", currentUserId)
+        .eq("is_active", true)
+        .order("brand"),
+      supabase
+        .from("reminders")
+        .select(
+          "id, user_id, vehicle_id, title, category, due_date, reminder_date, status, notes, created_at"
+        )
+        .eq("user_id", currentUserId)
+        .order("due_date", { ascending: true }),
+    ]);
 
-    const { data: authData, error: authError } =
-      await supabase.auth.getUser();
-
-    if (authError || !authData.user) {
-      setMessage("Accedi per visualizzare le scadenze.");
-      setLoading(false);
+    if (vehicleResult.error) {
+      setMessage("Errore nel caricamento dei veicoli: " + vehicleResult.error.message);
       return;
     }
 
-    const currentUserId = authData.user.id;
-    setUserId(currentUserId);
-
-    const { data: vehicleData, error: vehicleError } = await supabase
-      .from("vehicles")
-      .select("id, brand, model, plate")
-      .eq("user_id", currentUserId)
-      .eq("is_active", true)
-      .order("brand");
-
-    if (vehicleError) {
-      setMessage(
-        "Errore nel caricamento dei veicoli: " + vehicleError.message
-      );
-      setLoading(false);
+    if (reminderResult.error) {
+      setMessage("Errore nel caricamento delle scadenze: " + reminderResult.error.message);
       return;
     }
 
-    setVehicles(vehicleData ?? []);
-
-    const { data: reminderData, error: reminderError } = await supabase
-      .from("reminders")
-      .select(
-        "id, vehicle_id, title, category, due_date, reminder_date, status, notes"
-      )
-      .eq("user_id", currentUserId)
-      .order("due_date", { ascending: true, nullsFirst: false });
-
-    if (reminderError) {
-      setMessage(
-        "Errore nel caricamento delle scadenze: " + reminderError.message
-      );
-      setLoading(false);
-      return;
-    }
-
-    setRecords(reminderData ?? []);
-    setLoading(false);
-  }
+    setVehicles(vehicleResult.data ?? []);
+    setRecords(reminderResult.data ?? []);
+  }, []);
 
   useEffect(() => {
-    void loadData();
-  }, []);
+    let active = true;
+
+    async function initialize() {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (error || !data.session?.user) {
+        setMessage("Sessione non valida. Accedi nuovamente.");
+        setLoading(false);
+        return;
+      }
+
+      const currentUserId = data.session.user.id;
+      setUserId(currentUserId);
+      await loadData(currentUserId);
+
+      if (active) setLoading(false);
+    }
+
+    initialize();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+
+      if (!session?.user) {
+        setUserId("");
+        setVehicles([]);
+        setRecords([]);
+        router.push("/login");
+        return;
+      }
+
+      setUserId(session.user.id);
+      loadData(session.user.id);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [loadData, router]);
 
   async function saveReminder(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
 
     if (!userId) {
-      setMessage("Devi effettuare l'accesso.");
+      setMessage("Sessione utente non disponibile. Accedi nuovamente.");
       return;
     }
 
-    if (!vehicleId || !title.trim() || !category) {
+    if (!vehicleId || !title.trim()) {
       setMessage("Seleziona un veicolo e inserisci il titolo.");
       return;
     }
 
     setSaving(true);
 
-    const { error } = await supabase.from("reminders").insert({
-      user_id: userId,
-      vehicle_id: Number(vehicleId),
-      title: title.trim(),
-      category,
-      due_date: dueDate || null,
-      reminder_date: reminderDate || null,
-      status: "pending",
-      notes: notes.trim() || null,
-    });
+    const { data, error } = await supabase
+      .from("reminders")
+      .insert({
+        user_id: userId,
+        vehicle_id: Number(vehicleId),
+        title: title.trim(),
+        category,
+        due_date: dueDate || null,
+        reminder_date: reminderDate || null,
+        status: "pending",
+        notes: notes.trim() || null,
+      })
+      .select(
+        "id, user_id, vehicle_id, title, category, due_date, reminder_date, status, notes, created_at"
+      )
+      .single();
 
     setSaving(false);
 
@@ -147,14 +168,14 @@ export default function RemindersPage() {
       return;
     }
 
-    setMessage("Scadenza salvata correttamente.");
+    setRecords((current) => [...current, data].sort((a, b) =>
+      (a.due_date ?? "9999-12-31").localeCompare(b.due_date ?? "9999-12-31")
+    ));
     setTitle("");
-    setCategory("Revisione");
     setDueDate("");
     setReminderDate("");
     setNotes("");
-
-    await loadData();
+    setMessage("Scadenza salvata correttamente.");
   }
 
   async function toggleStatus(record: Reminder) {
@@ -176,7 +197,8 @@ export default function RemindersPage() {
       .update({ status: newStatus })
       .eq("id", record.id)
       .eq("user_id", userId)
-      .select("id, status");
+      .select("id, status")
+      .maybeSingle();
 
     setUpdatingId(null);
 
@@ -185,16 +207,16 @@ export default function RemindersPage() {
       return;
     }
 
-    if (!data || data.length === 0) {
+    if (!data) {
       setMessage(
-        "Nessuna riga aggiornata. Verificheremo i permessi e l'identificativo della scadenza."
+        "Nessuna riga aggiornata. Verifica che la scadenza appartenga all'utente connesso e che la policy UPDATE sia corretta."
       );
       return;
     }
 
     setRecords((current) =>
       current.map((item) =>
-        item.id === record.id ? { ...item, status: newStatus } : item
+        item.id === record.id ? { ...item, status: data.status } : item
       )
     );
 
@@ -205,216 +227,173 @@ export default function RemindersPage() {
     );
   }
 
-  const pendingCount = records.filter(
-    (record) => !isCompleted(record.status)
-  ).length;
-
-  const completedCount = records.filter((record) =>
-    isCompleted(record.status)
-  ).length;
-
-  const vehicleName = (id: number) => {
-    const vehicle = vehicles.find((item) => item.id === id);
-    return vehicle
-      ? `${vehicle.brand} ${vehicle.model} — ${vehicle.plate}`
-      : "Veicolo";
-  };
+  if (loading) {
+    return <main className="mx-auto max-w-5xl p-6">Caricamento scadenze…</main>;
+  }
 
   return (
-    <main className="mx-auto max-w-5xl p-6">
-      <div className="mb-6">
-        <a href="/vehicles" className="text-sm text-blue-600 hover:underline">
-          ← Torna ai veicoli
-        </a>
-
-        <h1 className="mt-3 text-3xl font-bold">Scadenze e Promemoria</h1>
-
+    <main className="mx-auto max-w-5xl space-y-8 p-6">
+      <header>
+        <h1 className="text-3xl font-bold">Scadenze e promemoria</h1>
         <p className="mt-2 text-gray-600">
-          Organizza le scadenze dei veicoli e tieni sotto controllo quelle da
-          gestire.
+          Gestisci le scadenze dei tuoi veicoli.
         </p>
-      </div>
+      </header>
 
       {message && (
-        <div className="mb-5 rounded-lg border p-3 text-sm" role="status">
+        <p role="status" className="rounded-lg border p-3">
           {message}
-        </div>
+        </p>
       )}
 
-      <section className="mb-8 rounded-xl border p-5 shadow-sm">
+      <section className="rounded-xl border p-5">
         <h2 className="mb-4 text-xl font-semibold">Nuova scadenza</h2>
 
-        {vehicles.length === 0 && !loading ? (
-          <p className="text-gray-600">
-            Non ci sono veicoli attivi. Aggiungi prima un veicolo nella sezione
-            Veicoli.
-          </p>
-        ) : (
-          <form onSubmit={saveReminder} className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-1 text-sm font-medium">
-              Veicolo *
-              <select
-                required
-                value={vehicleId}
-                onChange={(e) => setVehicleId(e.target.value)}
-                className="rounded-lg border p-2.5"
-              >
-                <option value="">Seleziona un veicolo</option>
-                {vehicles.map((vehicle) => (
-                  <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.brand} {vehicle.model} — {vehicle.plate}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="grid gap-1 text-sm font-medium">
-              Categoria *
-              <select
-                required
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="rounded-lg border p-2.5"
-              >
-                {categories.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="grid gap-1 text-sm font-medium md:col-span-2">
-              Titolo scadenza *
-              <input
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="rounded-lg border p-2.5"
-                placeholder="Es. Revisione Toyota RAV4"
-              />
-            </label>
-
-            <label className="grid gap-1 text-sm font-medium">
-              Data di scadenza
-              <input
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="rounded-lg border p-2.5"
-              />
-            </label>
-
-            <label className="grid gap-1 text-sm font-medium">
-              Ricordami il
-              <input
-                type="date"
-                value={reminderDate}
-                onChange={(e) => setReminderDate(e.target.value)}
-                className="rounded-lg border p-2.5"
-              />
-            </label>
-
-            <label className="grid gap-1 text-sm font-medium md:col-span-2">
-              Note
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                className="rounded-lg border p-2.5"
-                placeholder="Note facoltative"
-              />
-            </label>
-
-            <button
-              type="submit"
-              disabled={saving || loading || vehicles.length === 0}
-              className="rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-50 md:col-span-2"
+        <form onSubmit={saveReminder} className="grid gap-4 md:grid-cols-2">
+          <label className="grid gap-1">
+            Veicolo
+            <select
+              className="rounded border p-2"
+              value={vehicleId}
+              onChange={(event) => setVehicleId(event.target.value)}
+              required
             >
-              {saving ? "Salvataggio..." : "Salva scadenza"}
-            </button>
-          </form>
+              <option value="">Seleziona un veicolo</option>
+              {vehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.brand} {vehicle.model}
+                  {vehicle.plate ? ` — ${vehicle.plate}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="grid gap-1">
+            Titolo
+            <input
+              className="rounded border p-2"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Es. Revisione"
+              required
+            />
+          </label>
+
+          <label className="grid gap-1">
+            Categoria
+            <select
+              className="rounded border p-2"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              <option>Revisione</option>
+              <option>Assicurazione</option>
+              <option>Bollo</option>
+              <option>Manutenzione</option>
+              <option>Pneumatici</option>
+              <option>Altro</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1">
+            Data scadenza
+            <input
+              className="rounded border p-2"
+              type="date"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+          </label>
+
+          <label className="grid gap-1">
+            Ricordami il
+            <input
+              className="rounded border p-2"
+              type="date"
+              value={reminderDate}
+              onChange={(event) => setReminderDate(event.target.value)}
+            />
+          </label>
+
+          <label className="grid gap-1 md:col-span-2">
+            Note
+            <textarea
+              className="rounded border p-2"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              rows={3}
+            />
+          </label>
+
+          <button
+            className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
+            type="submit"
+            disabled={saving || !userId || vehicles.length === 0}
+          >
+            {saving ? "Salvataggio…" : "Salva scadenza"}
+          </button>
+        </form>
+
+        {vehicles.length === 0 && (
+          <p className="mt-3 text-sm text-gray-600">
+            Non risultano veicoli attivi. Aggiungi prima un veicolo.
+          </p>
         )}
       </section>
 
-      <section className="mb-8 grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border p-5 shadow-sm">
-          <p className="text-sm text-gray-600">Da gestire</p>
-          <p className="mt-1 text-3xl font-bold">{pendingCount}</p>
-        </div>
-
-        <div className="rounded-xl border p-5 shadow-sm">
-          <p className="text-sm text-gray-600">Completate</p>
-          <p className="mt-1 text-3xl font-bold">{completedCount}</p>
-        </div>
-      </section>
-
-      <section>
+      <section className="rounded-xl border p-5">
         <h2 className="mb-4 text-xl font-semibold">Elenco scadenze</h2>
 
-        {loading ? (
-          <p>Caricamento...</p>
-        ) : records.length === 0 ? (
-          <p className="rounded-xl border p-5 text-gray-600">
-            Non hai ancora registrato scadenze.
-          </p>
+        {records.length === 0 ? (
+          <p>Nessuna scadenza presente.</p>
         ) : (
-          <div className="grid gap-3">
+          <div className="space-y-3">
             {records.map((record) => {
+              const vehicle = vehicles.find(
+                (item) => item.id === record.vehicle_id
+              );
               const completed = isCompleted(record.status);
-              const updating = updatingId === record.id;
 
               return (
-                <article
-                  key={record.id}
-                  className="rounded-xl border p-4 shadow-sm"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold">{record.title}</p>
-                      <p className="mt-1 text-sm text-gray-600">
-                        {record.category} · {vehicleName(record.vehicle_id)}
+                <article key={record.id} className="rounded-lg border p-4">
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row">
+                    <div>
+                      <h3 className="font-semibold">{record.title}</h3>
+                      <p className="text-sm text-gray-600">
+                        {vehicle
+                          ? `${vehicle.brand} ${vehicle.model}`
+                          : `Veicolo ID ${record.vehicle_id}`}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Categoria: {record.category || "Altro"}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Scadenza: {formatDate(record.due_date)}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Promemoria: {formatDate(record.reminder_date)}
+                      </p>
+                      {record.notes && (
+                        <p className="mt-2 text-sm">{record.notes}</p>
+                      )}
+                      <p className="mt-2 font-medium">
+                        Stato: {completed ? "Completata" : "Da fare"}
                       </p>
                     </div>
 
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        completed
-                          ? "bg-green-100 text-green-800"
-                          : "bg-amber-100 text-amber-800"
-                      }`}
+                    <button
+                      type="button"
+                      onClick={() => toggleStatus(record)}
+                      disabled={updatingId !== null}
+                      className="h-fit rounded-lg border px-4 py-2 disabled:opacity-50"
                     >
-                      {completed ? "Completata" : "Da fare"}
-                    </span>
+                      {updatingId === record.id
+                        ? "Aggiornamento…"
+                        : completed
+                          ? "Riporta tra le attività da fare"
+                          : "Segna come completata"}
+                    </button>
                   </div>
-
-                  <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                    <p>
-                      <span className="font-medium">Scadenza:</span>{" "}
-                      {formatDate(record.due_date)}
-                    </p>
-                    <p>
-                      <span className="font-medium">Promemoria:</span>{" "}
-                      {formatDate(record.reminder_date)}
-                    </p>
-                  </div>
-
-                  {record.notes && (
-                    <p className="mt-3 text-sm text-gray-600">{record.notes}</p>
-                  )}
-
-                  <button
-                    type="button"
-                    disabled={updatingId !== null}
-                    onClick={() => void toggleStatus(record)}
-                    className="mt-4 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    {updating
-                      ? "Aggiornamento..."
-                      : completed
-                        ? "Riporta tra le scadenze da fare"
-                        : "Segna come completata"}
-                  </button>
                 </article>
               );
             })}
