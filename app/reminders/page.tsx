@@ -149,29 +149,44 @@ export default function RemindersPage() {
     await loadData();
   }
 
+ 
   async function toggleStatus(record: Reminder) {
-    const newStatus = record.status === "Completata" ? "Da fare" : "Completata";
     setMessage("");
 
-    const { error } = await supabase
+    if (!userId) {
+      setMessage("Sessione utente non disponibile. Accedi nuovamente.");
+      return;
+    }
+
+    const newStatus =
+      record.status === "Completata" ? "Da fare" : "Completata";
+
+    const { data, error } = await supabase
       .from("reminders")
       .update({ status: newStatus })
       .eq("id", record.id)
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .select("id, status");
 
     if (error) {
       setMessage("Errore nell'aggiornamento: " + error.message);
       return;
     }
 
+    if (!data || data.length === 0) {
+      setMessage(
+        "Nessuna riga aggiornata. Verificheremo i permessi e l'identificativo della scadenza."
+      );
+      return;
+    }
+
     setMessage(
-      newStatus === "Completata"
-        ? "Scadenza contrassegnata come completata."
-        : "Scadenza riportata tra quelle da fare."
+      "Aggiornamento riuscito: stato " + data[0].status + "."
     );
 
     await loadData();
   }
+
 
   const pendingCount = records.filter(
     (record) => record.status !== "Completata"
