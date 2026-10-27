@@ -1,4 +1,4 @@
-
+ 
 "use client";
 
 import { useEffect, useState } from "react";
@@ -14,13 +14,13 @@ type Vehicle = {
 type Fuelup = {
   id: number;
   vehicle_id: number;
-  date: string;
+  fuel_date: string;
   odometer_km: number;
   liters: number;
   price_per_liter: number;
-  total_cost: number;
+  total_amount: number;
   station: string | null;
-  is_full: boolean;
+  full_tank: boolean;
   notes: string | null;
 };
 
@@ -29,23 +29,29 @@ export default function FuelupsPage() {
   const [fuelups, setFuelups] = useState<Fuelup[]>([]);
   const [userId, setUserId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
-  const [date, setDate] = useState(
+  const [fuelDate, setFuelDate] = useState(
     new Date().toLocaleDateString("en-CA")
   );
   const [odometer, setOdometer] = useState("");
   const [liters, setLiters] = useState("");
   const [price, setPrice] = useState("");
   const [station, setStation] = useState("");
-  const [isFull, setIsFull] = useState(true);
+  const [fullTank, setFullTank] = useState(false);
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  const totalCost =
+  const totalAmount =
     Number(liters) > 0 && Number(price) > 0
       ? Number(liters) * Number(price)
       : 0;
+
+  const euro = (value: number) =>
+    new Intl.NumberFormat("it-IT", {
+      style: "currency",
+      currency: "EUR",
+    }).format(value);
 
   async function loadData() {
     setLoading(true);
@@ -72,7 +78,9 @@ export default function FuelupsPage() {
         .order("brand");
 
     if (vehicleError) {
-      setMessage("Errore nel caricamento dei veicoli: " + vehicleError.message);
+      setMessage(
+        "Errore nel caricamento dei veicoli: " + vehicleError.message
+      );
       setLoading(false);
       return;
     }
@@ -83,12 +91,15 @@ export default function FuelupsPage() {
       await supabase
         .from("fuelups")
         .select(
-          "id, vehicle_id, date, odometer_km, liters, price_per_liter, total_cost, station, is_full, notes"
+          "id, vehicle_id, fuel_date, odometer_km, liters, price_per_liter, total_amount, station, full_tank, notes"
         )
-        .order("date", { ascending: false });
+        .eq("user_id", currentUserId)
+        .order("fuel_date", { ascending: false });
 
     if (fuelupError) {
-      setMessage("Errore nel caricamento dei rifornimenti: " + fuelupError.message);
+      setMessage(
+        "Errore nel caricamento dei rifornimenti: " + fuelupError.message
+      );
       setLoading(false);
       return;
     }
@@ -110,7 +121,7 @@ export default function FuelupsPage() {
       return;
     }
 
-    if (!vehicleId || !date || !odometer || !liters || !price) {
+    if (!vehicleId || !fuelDate || !odometer || !liters || !price) {
       setMessage("Compila tutti i campi obbligatori.");
       return;
     }
@@ -129,13 +140,13 @@ export default function FuelupsPage() {
     const { error } = await supabase.from("fuelups").insert({
       user_id: userId,
       vehicle_id: Number(vehicleId),
-      date,
+      fuel_date: fuelDate,
       odometer_km: Number(odometer),
       liters: Number(liters),
       price_per_liter: Number(price),
-      total_cost: Number(totalCost.toFixed(2)),
+      total_amount: Number(totalAmount.toFixed(2)),
       station: station.trim() || null,
-      is_full: isFull,
+      full_tank: fullTank,
       notes: notes.trim() || null,
     });
 
@@ -151,35 +162,31 @@ export default function FuelupsPage() {
     setLiters("");
     setPrice("");
     setStation("");
-    setIsFull(true);
+    setFullTank(false);
     setNotes("");
 
     await loadData();
   }
 
-  const euro = (value: number) =>
-    new Intl.NumberFormat("it-IT", {
-      style: "currency",
-      currency: "EUR",
-    }).format(value);
-
   return (
     <main className="mx-auto max-w-5xl p-6">
       <div className="mb-6">
-        <a href="/vehicles" className="text-sm text-blue-600 hover:underline">
+        <a
+          href="/vehicles"
+          className="text-sm text-blue-600 hover:underline"
+        >
           ← Torna ai veicoli
         </a>
+
         <h1 className="mt-3 text-3xl font-bold">Rifornimenti</h1>
+
         <p className="mt-2 text-gray-600">
           Registra e consulta i rifornimenti dei tuoi veicoli.
         </p>
       </div>
 
       {message && (
-        <div
-          className="mb-5 rounded-lg border p-3 text-sm"
-          role="status"
-        >
+        <div className="mb-5 rounded-lg border p-3 text-sm" role="status">
           {message}
         </div>
       )}
@@ -189,7 +196,8 @@ export default function FuelupsPage() {
 
         {vehicles.length === 0 && !loading ? (
           <p className="text-gray-600">
-            Non ci sono veicoli attivi. Aggiungi prima un veicolo nella sezione Veicoli.
+            Non ci sono veicoli attivi. Aggiungi prima un veicolo nella sezione
+            Veicoli.
           </p>
         ) : (
           <form onSubmit={saveFuelup} className="grid gap-4 md:grid-cols-2">
@@ -215,8 +223,8 @@ export default function FuelupsPage() {
               <input
                 required
                 type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
+                value={fuelDate}
+                onChange={(e) => setFuelDate(e.target.value)}
                 className="rounded-lg border p-2.5"
               />
             </label>
@@ -231,7 +239,7 @@ export default function FuelupsPage() {
                 value={odometer}
                 onChange={(e) => setOdometer(e.target.value)}
                 className="rounded-lg border p-2.5"
-                placeholder="Es. 25350"
+                placeholder="Es. 25100"
               />
             </label>
 
@@ -245,7 +253,7 @@ export default function FuelupsPage() {
                 value={liters}
                 onChange={(e) => setLiters(e.target.value)}
                 className="rounded-lg border p-2.5"
-                placeholder="Es. 42.50"
+                placeholder="Es. 40"
               />
             </label>
 
@@ -259,13 +267,13 @@ export default function FuelupsPage() {
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 className="rounded-lg border p-2.5"
-                placeholder="Es. 1.789"
+                placeholder="Es. 1.800"
               />
             </label>
 
             <div className="rounded-lg bg-gray-50 p-3">
               <p className="text-sm text-gray-600">Costo totale calcolato</p>
-              <p className="text-2xl font-bold">{euro(totalCost)}</p>
+              <p className="text-2xl font-bold">{euro(totalAmount)}</p>
             </div>
 
             <label className="grid gap-1 text-sm font-medium">
@@ -281,8 +289,8 @@ export default function FuelupsPage() {
             <label className="flex items-center gap-3 rounded-lg border p-3 text-sm">
               <input
                 type="checkbox"
-                checked={isFull}
-                onChange={(e) => setIsFull(e.target.checked)}
+                checked={fullTank}
+                onChange={(e) => setFullTank(e.target.checked)}
                 className="h-4 w-4"
               />
               Ho fatto il pieno
@@ -339,27 +347,34 @@ export default function FuelupsPage() {
                           : "Veicolo"}
                       </p>
                       <p className="text-sm text-gray-600">
-                        {new Date(fuelup.date + "T12:00:00").toLocaleDateString("it-IT")}
+                        {new Date(
+                          fuelup.fuel_date + "T12:00:00"
+                        ).toLocaleDateString("it-IT")}
                         {" · "}
-                        {fuelup.odometer_km.toLocaleString("it-IT")} km
+                        {Number(fuelup.odometer_km).toLocaleString("it-IT")} km
                       </p>
                     </div>
+
                     <p className="text-xl font-bold">
-                      {euro(Number(fuelup.total_cost))}
+                      {euro(Number(fuelup.total_amount))}
                     </p>
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-gray-700">
-                    <span>{Number(fuelup.liters).toLocaleString("it-IT")} L</span>
+                    <span>
+                      {Number(fuelup.liters).toLocaleString("it-IT")} L
+                    </span>
                     <span>
                       {euro(Number(fuelup.price_per_liter))}/L
                     </span>
-                    <span>{fuelup.is_full ? "Pieno" : "Parziale"}</span>
+                    <span>{fuelup.full_tank ? "Pieno" : "Parziale"}</span>
                     {fuelup.station && <span>{fuelup.station}</span>}
                   </div>
 
                   {fuelup.notes && (
-                    <p className="mt-2 text-sm text-gray-600">{fuelup.notes}</p>
+                    <p className="mt-2 text-sm text-gray-600">
+                      {fuelup.notes}
+                    </p>
                   )}
                 </article>
               );
